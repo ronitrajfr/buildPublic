@@ -2,6 +2,7 @@ import { currentUser, auth, clerkClient } from "@clerk/nextjs/server";
 import { NextRequest, NextResponse } from "next/server";
 import { Ratelimit } from "@upstash/ratelimit";
 import { Redis } from "@upstash/redis";
+import { headers } from "next/headers";
 
 const UPSTASH_REDIS_REST_URL = process.env.UPSTASH_REDIS_REST_URL;
 const UPSTASH_REDIS_REST_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN;
@@ -15,9 +16,10 @@ const redis = new Redis({
   token: UPSTASH_REDIS_REST_TOKEN,
 });
 
+//10 REQUESTS PER 10 SECONDS
 const ratelimit = new Ratelimit({
   redis,
-  limiter: Ratelimit.slidingWindow(2, "30 s"),
+  limiter: Ratelimit.slidingWindow(10, "10 s"),
   analytics: true,
 });
 
@@ -26,6 +28,29 @@ export async function GET(
   { params }: { params: { repository: string } }
 ) {
   try {
+    const headersList = await headers();
+    const ip = headersList.get("x-forwarded-for") ?? "anonymous";
+
+    const { success, limit, reset, remaining } = await ratelimit.limit(ip);
+    if (!success) {
+      return NextResponse.json(
+        {
+          error: "Too many requests",
+          limit,
+          reset,
+          remaining,
+        },
+        {
+          status: 429,
+          headers: {
+            "X-RateLimit-Limit": limit.toString(),
+            "X-RateLimit-Remaining": remaining.toString(),
+            "X-RateLimit-Reset": reset.toString(),
+          },
+        }
+      );
+    }
+
     const { repository } = await params;
     if (!repository) {
       return NextResponse.json(
